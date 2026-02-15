@@ -1,255 +1,221 @@
-# GoBlog Project Initialization — Implementation Plan
+# Implementation Plan: Configuration Module (`internal/config`)
 
-## Current State
-- Repo has: `.gitignore` (default Go template), `LICENSE` (MIT), `.git/`
-- Go version: `go1.25.6 linux/amd64`
-- No `go.mod` exists yet
+## Overview
 
----
-
-## Step 1: Initialize Go Module
-
-Run `go mod init github.com/manasm11/goblog` to create `go.mod` with Go 1.25.6.
-
-**Files created:**
-- `go.mod` — will contain `module github.com/manasm11/goblog` and `go 1.25`
+Create the configuration module at `internal/config/config.go` that loads configuration from environment variables (with `.env` file support via `godotenv`), applies defaults, and validates required fields. Add comprehensive tests in `internal/config/config_test.go`. Run `go mod tidy` to fetch the new dependency.
 
 ---
 
-## Step 2: Create Directory Structure with `.gitkeep` Files
+## Files to Create/Modify
 
-Create 18 directories, each with an empty `.gitkeep` file so Git tracks them:
+### 1. Create `internal/config/config.go`
 
-| Directory | File |
+**Package:** `config`
+
+**Imports:** `log`, `os`, `github.com/joho/godotenv`
+
+#### Struct: `Config`
+
+```go
+type Config struct {
+    Port            string
+    BaseURL         string
+    BlogTitle       string
+    BlogDescription string
+    AuthorName      string
+    AdminUsername    string
+    AdminPassword   string
+    DBPath          string
+    UploadDir       string
+    SessionSecret   string
+    Env             string
+}
+```
+
+All fields are exported strings. No struct tags needed (this is not deserialized from JSON/YAML).
+
+#### Function: `Load() *Config`
+
+Signature: `func Load() *Config`
+
+Implementation steps:
+
+1. Call `godotenv.Load()` — **ignore the returned error**. The `.env` file is optional. If it exists, `godotenv` loads its key-value pairs into the process environment. Crucially, `godotenv.Load()` does **not** overwrite existing env vars, so real environment variables always take precedence over `.env` values.
+
+2. Construct the `Config` struct using the `getEnv` helper for each field:
+
+   | Field             | Env Var                    | Default                    |
+   |-------------------|----------------------------|----------------------------|
+   | `Port`            | `GOBLOG_PORT`              | `"8069"`                   |
+   | `BaseURL`         | `GOBLOG_BASE_URL`          | `"http://localhost:8069"`  |
+   | `BlogTitle`       | `GOBLOG_BLOG_TITLE`        | `"Manas's Blog"`           |
+   | `BlogDescription` | `GOBLOG_BLOG_DESCRIPTION`  | `""` (empty)               |
+   | `AuthorName`      | `GOBLOG_AUTHOR_NAME`       | `"Manas"`                  |
+   | `AdminUsername`    | `GOBLOG_ADMIN_USERNAME`    | `""` (empty)               |
+   | `AdminPassword`   | `GOBLOG_ADMIN_PASSWORD`    | `""` (empty)               |
+   | `DBPath`          | `GOBLOG_DB_PATH`           | `"./goblog.db"`            |
+   | `UploadDir`       | `GOBLOG_UPLOAD_DIR`        | `"./uploads"`              |
+   | `SessionSecret`   | `GOBLOG_SESSION_SECRET`    | `""` (empty)               |
+   | `Env`             | `GOBLOG_ENV`               | `"development"`            |
+
+3. **Validate `Env`:** If `cfg.Env` is neither `"development"` nor `"production"`, call `log.Fatalf("invalid GOBLOG_ENV value %q: must be \"development\" or \"production\"", cfg.Env)`.
+
+4. **Validate admin credentials in production:** If `cfg.Env == "production"` and (`cfg.AdminUsername == ""` or `cfg.AdminPassword == ""`), call `log.Fatalf("GOBLOG_ADMIN_USERNAME and GOBLOG_ADMIN_PASSWORD are required in production")`.
+
+5. Return `&cfg`.
+
+#### Helper: `getEnv(key, fallback string) string`
+
+Signature: `func getEnv(key, fallback string) string`
+
+- Unexported (lowercase).
+- Calls `os.Getenv(key)`.
+- If the result is `""`, return `fallback`.
+- Otherwise return the value from the environment.
+
+**Note:** `os.Getenv` returns `""` for both unset and explicitly-empty env vars. This means setting `GOBLOG_PORT=""` would cause the default `"8069"` to be used. This is acceptable and standard Go behavior.
+
+---
+
+### 2. Create `internal/config/config_test.go`
+
+**Package:** `config` (same package for access to unexported `getEnv`)
+
+**Imports:** `os`, `testing`
+
+#### Helper: clearing all GOBLOG env vars
+
+Create a test helper (unexported) that unsets all known `GOBLOG_*` variables to ensure test isolation:
+
+```
+func clearEnv(t *testing.T)
+```
+
+Calls `t.Setenv(key, "")` would set them to empty (which `getEnv` treats as unset), but to be fully clean, use `os.Unsetenv` for each key inside a `t.Cleanup`. The list of keys to unset:
+- `GOBLOG_PORT`
+- `GOBLOG_BASE_URL`
+- `GOBLOG_BLOG_TITLE`
+- `GOBLOG_BLOG_DESCRIPTION`
+- `GOBLOG_AUTHOR_NAME`
+- `GOBLOG_ADMIN_USERNAME`
+- `GOBLOG_ADMIN_PASSWORD`
+- `GOBLOG_DB_PATH`
+- `GOBLOG_UPLOAD_DIR`
+- `GOBLOG_SESSION_SECRET`
+- `GOBLOG_ENV`
+
+**Better approach:** Use `t.Setenv` for the keys we want to set in each test. `t.Setenv` automatically saves and restores the original value after the test, providing isolation without manual cleanup.
+
+#### Test: `TestLoadDefaults(t *testing.T)`
+
+- Unset all `GOBLOG_*` env vars (loop through each key, call `os.Unsetenv`).
+- Call `cfg := Load()`.
+- Assert each field matches its default value using direct comparison with `t.Errorf`:
+  - `cfg.Port == "8069"`
+  - `cfg.BaseURL == "http://localhost:8069"`
+  - `cfg.BlogTitle == "Manas's Blog"`
+  - `cfg.BlogDescription == ""`
+  - `cfg.AuthorName == "Manas"`
+  - `cfg.AdminUsername == ""`
+  - `cfg.AdminPassword == ""`
+  - `cfg.DBPath == "./goblog.db"`
+  - `cfg.UploadDir == "./uploads"`
+  - `cfg.SessionSecret == ""`
+  - `cfg.Env == "development"`
+
+**Note:** This test implicitly validates that `Load()` does NOT `log.Fatal` in development mode without admin credentials.
+
+#### Test: `TestLoadFromEnvVars(t *testing.T)`
+
+- Use `t.Setenv` for every `GOBLOG_*` variable with non-default values:
+  - `GOBLOG_PORT` = `"9090"`
+  - `GOBLOG_BASE_URL` = `"https://example.com"`
+  - `GOBLOG_BLOG_TITLE` = `"Test Blog"`
+  - `GOBLOG_BLOG_DESCRIPTION` = `"A test blog"`
+  - `GOBLOG_AUTHOR_NAME` = `"Tester"`
+  - `GOBLOG_ADMIN_USERNAME` = `"admin"`
+  - `GOBLOG_ADMIN_PASSWORD` = `"secret"`
+  - `GOBLOG_DB_PATH` = `"/tmp/test.db"`
+  - `GOBLOG_UPLOAD_DIR` = `"/tmp/uploads"`
+  - `GOBLOG_SESSION_SECRET` = `"mysecret"`
+  - `GOBLOG_ENV` = `"production"`
+- Call `cfg := Load()`.
+- Assert each field matches the env var value, not the default.
+
+#### Test: `TestLoadPartialEnvVars(t *testing.T)`
+
+- Use `t.Setenv` for only a subset:
+  - `GOBLOG_PORT` = `"3000"`
+  - `GOBLOG_BLOG_TITLE` = `"Custom Blog"`
+- Unset the rest (to be safe, unset all other `GOBLOG_*` vars).
+- Call `cfg := Load()`.
+- Assert:
+  - `cfg.Port == "3000"` (overridden)
+  - `cfg.BlogTitle == "Custom Blog"` (overridden)
+  - `cfg.BaseURL == "http://localhost:8069"` (default)
+  - `cfg.Env == "development"` (default)
+  - All other fields at defaults.
+
+#### Test: `TestGetEnv(t *testing.T)`
+
+- **Subtest "returns env var value when set":**
+  - `t.Setenv("TEST_CONFIG_KEY", "myvalue")`
+  - Assert `getEnv("TEST_CONFIG_KEY", "default") == "myvalue"`
+
+- **Subtest "returns fallback when not set":**
+  - `os.Unsetenv("TEST_CONFIG_KEY_MISSING")`
+  - Assert `getEnv("TEST_CONFIG_KEY_MISSING", "fallback") == "fallback"`
+
+- **Subtest "returns fallback when set to empty":**
+  - `t.Setenv("TEST_CONFIG_KEY_EMPTY", "")`
+  - Assert `getEnv("TEST_CONFIG_KEY_EMPTY", "default") == "default"`
+
+#### Validation Tests (not included — rationale)
+
+The validation logic (`log.Fatalf` for invalid `Env` or missing admin credentials in production) calls `os.Exit(1)` under the hood. Testing this requires either:
+- Running a subprocess via `exec.Command` and checking the exit code
+- Refactoring to inject a logger or return an error
+
+Neither is requested. The existing tests implicitly prove the happy paths work (development mode without admin creds succeeds, production mode with admin creds succeeds). A comment in the test file should note that fatal validation paths are exercised by the design of the other tests but not explicitly asserted.
+
+---
+
+### 3. `go.mod` and `go.sum` (modified by `go mod tidy`)
+
+Running `go mod tidy` will:
+- Add `require github.com/joho/godotenv v1.5.1` (or latest) to `go.mod`
+- Create `go.sum` with the checksum for the dependency
+
+No manual edits to `go.mod` are needed.
+
+---
+
+## Files NOT Modified
+
+- **`cmd/server/main.go`** — Not in scope. A future step will integrate `config.Load()` into `main()` to replace the hardcoded port.
+- **`Makefile`** — No changes needed.
+- **`.env.example`** — Already contains all the correct `GOBLOG_*` variable names that map to the `Config` struct fields.
+
+---
+
+## Edge Cases
+
+| Edge Case | Behavior |
 |---|---|
-| `cmd/server/` | *(will contain main.go — no .gitkeep needed)* |
-| `internal/config/` | `internal/config/.gitkeep` |
-| `internal/database/` | `internal/database/.gitkeep` |
-| `internal/models/` | `internal/models/.gitkeep` |
-| `internal/repository/` | `internal/repository/.gitkeep` |
-| `internal/services/` | `internal/services/.gitkeep` |
-| `internal/handlers/` | `internal/handlers/.gitkeep` |
-| `internal/middleware/` | `internal/middleware/.gitkeep` |
-| `internal/markdown/` | `internal/markdown/.gitkeep` |
-| `internal/seo/` | `internal/seo/.gitkeep` |
-| `templates/layouts/` | `templates/layouts/.gitkeep` |
-| `templates/pages/` | `templates/pages/.gitkeep` |
-| `templates/partials/` | `templates/partials/.gitkeep` |
-| `templates/admin/` | `templates/admin/.gitkeep` |
-| `static/css/` | `static/css/.gitkeep` |
-| `static/js/` | `static/js/.gitkeep` |
-| `static/images/` | `static/images/.gitkeep` |
-| `uploads/` | `uploads/.gitkeep` |
-
-**Note:** `cmd/server/` does NOT need a `.gitkeep` because it will contain `main.go`.
-
----
-
-## Step 3: Create `cmd/server/main.go`
-
-**File:** `cmd/server/main.go`
-
-**Package:** `main`
-
-**Imports:**
-- `context`
-- `encoding/json`
-- `log`
-- `net/http`
-- `os`
-- `os/signal`
-- `syscall`
-- `time`
-
-**Structure:**
-
-### `func main()`
-1. Create a `http.NewServeMux()`
-2. Register `GET /health` handler on the mux
-3. Create `http.Server` with:
-   - `Addr: ":8069"`
-   - `Handler: mux`
-4. Log `"GoBlog server starting on :8069"`
-5. Start the server in a goroutine via `server.ListenAndServe()`
-6. Create a channel listening for `os.Interrupt` and `syscall.SIGTERM` using `signal.NotifyContext` or `signal.Notify`
-7. Block on the signal channel
-8. On signal received, log shutdown message
-9. Create a context with timeout (e.g., 10 seconds) for graceful shutdown
-10. Call `server.Shutdown(ctx)`
-11. Log completion and exit
-
-### Health endpoint handler
-- Respond to `GET /health` only (check `r.Method == http.MethodGet`; return 405 for other methods)
-- Set `Content-Type: application/json`
-- Write JSON: `{"status":"ok","version":"0.1.0"}`
-- Use `json.NewEncoder(w).Encode()` or `json.Marshal` + `w.Write`
-
-**Edge cases:**
-- Non-GET requests to `/health` should return 405 Method Not Allowed
-- Graceful shutdown should have a timeout so the process doesn't hang forever
-- If `ListenAndServe` returns a non-`http.ErrServerClosed` error, log it fatally
-
----
-
-## Step 4: Create `.env.example`
-
-**File:** `.env.example`
-
-**Contents (verbatim):**
-```
-GOBLOG_PORT=8069
-GOBLOG_BASE_URL=http://localhost:8069
-GOBLOG_BLOG_TITLE=Manas's Blog
-GOBLOG_BLOG_DESCRIPTION=Thoughts on software engineering, technology, and life
-GOBLOG_AUTHOR_NAME=Manas
-GOBLOG_ADMIN_USERNAME=admin
-GOBLOG_ADMIN_PASSWORD=changeme
-GOBLOG_DB_PATH=./goblog.db
-GOBLOG_UPLOAD_DIR=./uploads
-GOBLOG_SESSION_SECRET=change-this-to-a-random-string
-GOBLOG_ENV=development
-```
-
----
-
-## Step 5: Update `.gitignore`
-
-**File:** `.gitignore` (replace existing contents)
-
-The existing `.gitignore` has the default Go template. Replace it entirely with a project-specific version that includes the original useful entries plus the requested additions:
-
-```gitignore
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-
-# Build output
-bin/
-tmp/
-
-# Dependencies
-vendor/
-
-# Database
-goblog.db
-
-# Environment
-.env
-
-# Uploads (keep directory via .gitkeep)
-uploads/*
-!uploads/.gitkeep
-
-# Go workspace
-go.work
-go.work.sum
-```
-
-**Changes from existing:**
-- Added `bin/`, `tmp/`
-- Added `goblog.db`
-- Added `uploads/*` and `!uploads/.gitkeep`
-- Added `vendor/` (was commented out)
-- Removed `coverage.*`, `*.coverprofile`, `profile.cov` (not in spec, but harmless — keep if desired)
-- Kept essential Go ignores from original
-
----
-
-## Step 6: Create `Makefile`
-
-**File:** `Makefile`
-
-**Targets:**
-
-| Target | Command | Description |
-|---|---|---|
-| `run` | `go run cmd/server/main.go` | Run the server |
-| `build` | `go build -o bin/goblog cmd/server/main.go` | Build binary |
-| `test` | `go test ./... -v` | Run all tests |
-| `templ` | `templ generate` | Generate templ templates |
-| `dev` | `templ generate && go run cmd/server/main.go` | Dev workflow |
-| `clean` | `rm -rf bin/ tmp/` | Clean build artifacts |
-
-**Important details:**
-- Each target should be declared `.PHONY` (none produce files matching their target name)
-- Use tabs (not spaces) for recipe indentation — **critical for Makefile syntax**
-
----
-
-## Step 7: Create `README.md`
-
-**File:** `README.md`
-
-**Sections:**
-
-### Title & Description
-- `# GoBlog`
-- Brief description: A lightweight, SEO-friendly blog engine built with Go
-
-### Tech Stack
-- Go (HTTP server, backend logic)
-- Templ (type-safe HTML templating)
-- Pico CSS (minimal, classless CSS framework)
-- SQLite (embedded database)
-
-### Setup Instructions
-1. Clone the repository
-2. Copy `.env.example` to `.env` and customize values
-3. Run `make dev` to start the development server
-4. Visit `http://localhost:8069`
-
-### Features (checkboxes — all unchecked)
-- [ ] Markdown blog posts with frontmatter
-- [ ] Admin dashboard for post management
-- [ ] SEO-optimized HTML output (meta tags, Open Graph, sitemap)
-- [ ] RSS/Atom feed generation
-- [ ] Syntax highlighting for code blocks
-- [ ] Image upload and management
-- [ ] Tag/category support
-- [ ] Responsive design with Pico CSS
-- [ ] SQLite database with migrations
-- [ ] Health check endpoint
-- [ ] Graceful shutdown
-- [ ] Session-based authentication
-
----
-
-## Step 8: Run `go mod tidy`
-
-Run `go mod tidy` after creating `main.go`. Since the code only uses standard library packages, this should be a no-op but ensures `go.sum` is clean and `go.mod` is valid.
-
----
-
-## File Summary
-
-| Action | File |
-|---|---|
-| **Create** | `go.mod` (via `go mod init`) |
-| **Create** | `cmd/server/main.go` |
-| **Create** | `.env.example` |
-| **Modify** | `.gitignore` (replace contents) |
-| **Create** | `Makefile` |
-| **Create** | `README.md` |
-| **Create** | 17 × `.gitkeep` files (all empty dirs except `cmd/server/`) |
-
-**Total: 21 files created, 1 file modified**
+| `.env` file does not exist | `godotenv.Load()` error is silently ignored; falls back to real env vars + defaults |
+| `.env` file is malformed | Same as above — error ignored, real env vars + defaults used |
+| `GOBLOG_ENV` set to invalid value (e.g., `"staging"`) | `log.Fatalf` with descriptive message |
+| Production mode, missing `AdminUsername` | `log.Fatalf` requiring both admin credentials |
+| Production mode, missing `AdminPassword` | `log.Fatalf` requiring both admin credentials |
+| Development mode, missing admin credentials | Allowed — `Load()` succeeds |
+| Env var set to empty string (`GOBLOG_PORT=""`) | Treated as unset; default value used (standard Go `os.Getenv` behavior) |
+| Real env var + `.env` both set same key | Real env var wins (`godotenv.Load` does not overwrite existing vars) |
 
 ---
 
 ## Execution Order
 
-1. `go mod init github.com/manasm11/goblog`
-2. Create all directories + `.gitkeep` files (parallel, no dependencies)
-3. Create `cmd/server/main.go`
-4. Create `.env.example`
-5. Modify `.gitignore`
-6. Create `Makefile`
-7. Create `README.md`
-8. Run `go mod tidy`
-
-Steps 2–7 are independent and can be done in any order. Step 1 must come first (creates `go.mod`). Step 8 must come last (validates the module).
+1. Create `internal/config/config.go`
+2. Create `internal/config/config_test.go`
+3. Run `go mod tidy` (fetches `godotenv`, creates `go.sum`)
+4. Run `make test` to verify all tests pass

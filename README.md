@@ -51,16 +51,25 @@ uploads/            — user-uploaded files
 | `dev`   | Generate templates and run server        |
 | `clean` | Remove `bin/` and `tmp/` directories     |
 
-## Environment Variables
+## Configuration
 
-See `.env.example` for all available variables. Key settings:
+Configuration is loaded in order of priority: `.env` file (if present) → environment variables → defaults. See `.env.example` for a template.
 
-| Variable              | Default                  | Description              |
-|-----------------------|--------------------------|--------------------------|
-| `GOBLOG_PORT`         | `8069`                   | Server port              |
-| `GOBLOG_DB_PATH`      | `./goblog.db`            | SQLite database path     |
-| `GOBLOG_ENV`          | `development`            | Environment mode         |
-| `GOBLOG_UPLOAD_DIR`   | `./uploads`              | Upload directory         |
+| Variable                   | Default                  | Description                                      |
+|----------------------------|--------------------------|--------------------------------------------------|
+| `GOBLOG_PORT`              | `8069`                   | Server port                                      |
+| `GOBLOG_BASE_URL`          | `http://localhost:8069`  | Public base URL                                  |
+| `GOBLOG_BLOG_TITLE`        | `Manas's Blog`           | Blog title                                       |
+| `GOBLOG_BLOG_DESCRIPTION`  | *(empty)*                | Blog description                                 |
+| `GOBLOG_AUTHOR_NAME`       | `Manas`                  | Author name                                      |
+| `GOBLOG_ADMIN_USERNAME`    | *(empty)*                | Admin login username (required in production)     |
+| `GOBLOG_ADMIN_PASSWORD`    | *(empty)*                | Admin login password (required in production)     |
+| `GOBLOG_DB_PATH`           | `./goblog.db`            | SQLite database path                             |
+| `GOBLOG_UPLOAD_DIR`        | `./uploads`              | Upload directory                                 |
+| `GOBLOG_SESSION_SECRET`    | *(empty)*                | Session signing secret                           |
+| `GOBLOG_ENV`               | `development`            | `development` or `production`                    |
+
+**Note:** In production mode, `GOBLOG_ADMIN_USERNAME` and `GOBLOG_ADMIN_PASSWORD` must be set or the server will refuse to start.
 
 ## API
 

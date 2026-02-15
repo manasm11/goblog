@@ -31,7 +31,7 @@ uploads/              — user file uploads
 - **Port**: 8069 (configured via `GOBLOG_PORT`)
 - **Routing**: Go 1.22+ `http.ServeMux` with method patterns (e.g., `"GET /health"`)
 - **Graceful shutdown**: `signal.NotifyContext` with SIGINT/SIGTERM, 10s timeout
-- **Config**: Environment variables prefixed with `GOBLOG_` (see `.env.example`)
+- **Config**: `internal/config.Load()` reads `.env` via godotenv, then env vars with `GOBLOG_` prefix, then defaults. In production, `GOBLOG_ADMIN_USERNAME` and `GOBLOG_ADMIN_PASSWORD` are required (log.Fatal).
 - **Empty dirs**: Tracked via `.gitkeep` files
 - **Templates**: Templ (type-safe Go HTML templating)
 - **CSS framework**: Pico CSS (classless)
@@ -56,6 +56,10 @@ make clean   # rm -rf bin/ tmp/
 
 Ignored: `goblog.db`, `.env`, `uploads/*` (except `.gitkeep`), `bin/`, `tmp/`, `*.exe`, `vendor/`
 
+## Dependencies
+
+- `github.com/joho/godotenv` v1.5.1 — `.env` file loading
+
 ## Current Status
 
-Phase 1 complete — project scaffolding with HTTP server and health endpoint. No external dependencies yet (no `go.sum`). All `internal/` packages are empty stubs.
+Phase 2 in progress — configuration module implemented (`internal/config/`). Remaining `internal/` packages are empty stubs.
